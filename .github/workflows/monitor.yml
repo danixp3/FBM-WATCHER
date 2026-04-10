@@ -88,10 +88,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "${GITHUB_REF_NAME}" --depth=1
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
           git add estado_motos.json
           if git diff --staged --quiet; then
-            echo "estado_motos.json sin cambios; no hay commit."
+            echo "estado_motos.json sin cambios respecto al último commit."
           else
             git commit -m "chore: actualizar estado_motos.json (Marketplace monitor)"
-            git push
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+            echo "Push de estado_motos.json completado."
           fi

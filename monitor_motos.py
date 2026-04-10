@@ -346,12 +346,18 @@ def load_price_css_selector() -> str | None:
     return None
 
 
-def send_telegram(message: str) -> None:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+def send_telegram(message: str) -> bool:
+    """
+    Lee token/chat del entorno en cada llamada (importante en GitHub Actions).
+    Devuelve True si no hay credenciales (no es error) o si Telegram respondió ok.
+    False si había credenciales pero la API falló.
+    """
+    token = _env_strip("TELEGRAM_BOT_TOKEN")
+    raw_chat = _env_strip("TELEGRAM_CHAT_ID")
+    if not token or not raw_chat:
         print("[Aviso] Telegram no configurado; mensaje no enviado:", message[:200], file=sys.stderr)
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    raw_chat = TELEGRAM_CHAT_ID.strip()
+        return True
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     if re.fullmatch(r"-?\d+", raw_chat):
         chat: str | int = int(raw_chat)
     else:
@@ -370,8 +376,17 @@ def send_telegram(message: str) -> None:
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            if resp.status != 200:
-                print(f"Telegram HTTP {resp.status}", file=sys.stderr)
+            raw = resp.read().decode("utf-8")
+            try:
+                out = json.loads(raw)
+            except json.JSONDecodeError:
+                print(f"Telegram respuesta no JSON: {raw[:300]}", file=sys.stderr)
+                return False
+            if out.get("ok"):
+                print("Telegram OK (mensaje enviado).", flush=True)
+                return True
+            print(f"Telegram API ok=false: {raw[:500]}", file=sys.stderr)
+            return False
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")
         print(f"Error Telegram HTTP {e.code}: {e.reason}\n{err_body}", file=sys.stderr)
@@ -383,8 +398,10 @@ def send_telegram(message: str) -> None:
                 "     y copia el chat_id que salga en TELEGRAM_CHAT_ID del .env\n",
                 file=sys.stderr,
             )
+        return False
     except urllib.error.URLError as e:
         print(f"Error Telegram: {e}", file=sys.stderr)
+        return False
 
 
 def normalize_price(s: str) -> str:
@@ -774,9 +791,33 @@ async def run_checks(
                 finally:
                     await page.close()
 
-        results = await asyncio.gather(*(one(u) for u in urls))
+        raw_results = await asyncio.gather(*(one(u) for u in urls), return_exceptions=True)
 
         await browser.close()
+
+    results: list[tuple[str, dict]] = []
+    for url, res in zip(urls, raw_results):
+        if isinstance(res, Exception):
+            print(f"[error] {url}\n  {res!r}", file=sys.stderr)
+            results.append(
+                (
+                    url,
+                    {
+                        "titulo": "",
+                        "precio": "",
+                        "disponible": True,
+                        "error": str(res),
+                        "blocked": False,
+                        "cookie_banner": False,
+                        "url_final": url,
+                        "lectura_valida": False,
+                        "pagina_tipo": "desconocida",
+                        "motivo_lectura": str(res),
+                    },
+                )
+            )
+        else:
+            results.append(res)
 
     for url, snap in results:
         if verificar:
@@ -912,7 +953,9 @@ def main() -> None:
 
     # En GitHub Actions también se envía por defecto. Para desactivar: MW_SKIP_MONITOR_STARTUP=1
     if os.environ.get("MW_SKIP_MONITOR_STARTUP", "").lower() not in ("1", "true", "yes"):
-        send_telegram(TELEGRAM_STARTUP_MESSAGE)
+        if not send_telegram(TELEGRAM_STARTUP_MESSAGE):
+            print("Fallo al enviar a Telegram con credenciales configuradas; abortando.", file=sys.stderr)
+            sys.exit(1)
 
     urls = load_urls()
     state = load_state()
@@ -923,25 +966,27 @@ def main() -> None:
         print("OK = lectura considerada anuncio real | tipo = login|cookies|anuncio|…")
         print("-" * 120)
 
-    asyncio.run(
-        run_checks(
-            urls,
-            concurrency=args.concurrencia,
-            post_wait_ms=args.espera_ms,
-            debug=args.debug,
-            verificar=args.verificar,
-            url_map=url_map,
-            now_iso=now_iso,
+    try:
+        asyncio.run(
+            run_checks(
+                urls,
+                concurrency=args.concurrencia,
+                post_wait_ms=args.espera_ms,
+                debug=args.debug,
+                verificar=args.verificar,
+                url_map=url_map,
+                now_iso=now_iso,
+            )
         )
-    )
+    finally:
+        if not args.verificar:
+            save_state(state)
+            print(f"Estado guardado en {STATE_FILE}", flush=True)
 
     if args.verificar:
         print("-" * 120)
-        print("(Modo --verificar: no se ha guardado estado_motos.json ni Telegram.)")
+        print("(Modo --verificar: no se guarda estado_motos.json.)")
         return
-
-    save_state(state)
-    print(f"Estado guardado en {STATE_FILE}")
 
 
 if __name__ == "__main__":
