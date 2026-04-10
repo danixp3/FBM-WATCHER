@@ -45,6 +45,7 @@ except ImportError:
 # --- Telegram: .env local (no subir) o variables de entorno / secretos en GitHub Actions ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_STARTUP_MESSAGE = "¡Monitor de motos activado y buscando!"
 URLS_FILE = BASE_DIR / "urls_motos.txt"
 STATE_FILE = BASE_DIR / "estado_motos.json"
 DEBUG_DIR = BASE_DIR / "debug_captures"
@@ -58,7 +59,7 @@ USER_AGENT = (
 
 VIEWPORT = {"width": 1920, "height": 1080}
 NAV_TIMEOUT_MS = int(os.environ.get("MW_NAV_TIMEOUT_MS", "60000"))
-POST_LOAD_WAIT_MS = int(os.environ.get("MW_POST_WAIT_MS", "900"))
+POST_LOAD_WAIT_MS = int(os.environ.get("MW_POST_WAIT_MS", "1500"))
 DEFAULT_CONCURRENCY = int(os.environ.get("MW_CONCURRENCY", "4"))
 
 
@@ -71,53 +72,97 @@ EXTRACT_SCRIPT = """
     return s.replace(/\\\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
   }
 
+  function collectListingPriceBlocks(segment) {
+    const out = [];
+    let from = 0;
+    const key = '"listing_price"';
+    while (true) {
+      const i = segment.indexOf(key, from);
+      if (i < 0) break;
+      const j = segment.indexOf('{', i + key.length);
+      if (j < 0) break;
+      let depth = 0;
+      let k = j;
+      for (; k < segment.length; k++) {
+        const c = segment[k];
+        if (c === '{') depth++;
+        else if (c === '}') {
+          depth--;
+          if (depth === 0) {
+            out.push(segment.slice(j + 1, k));
+            from = k + 1;
+            break;
+          }
+        }
+      }
+      if (k >= segment.length) break;
+    }
+    return out;
+  }
+
   function extractPriceFromEmbeddedJson(html, id) {
     if (!id || !html) return '';
     let winStart = -1;
     const routeMarker = '"props":{"isCrawler":false';
-    let from = 0;
+    let fr = 0;
     while (true) {
-      const p = html.indexOf(routeMarker, from);
+      const p = html.indexOf(routeMarker, fr);
       if (p < 0) break;
       const head = html.slice(p, p + 900);
       if (head.indexOf('"id":"' + id + '"') >= 0) {
         winStart = p;
         break;
       }
-      from = p + 1;
+      fr = p + 1;
     }
     if (winStart < 0) {
       const needle = '"id":"' + id + '"';
       winStart = html.indexOf(needle);
       if (winStart < 0) return '';
     }
-    const win = html.slice(winStart, winStart + 45000);
-    const re = /"listing_price"\\s*:\\s*\\{([^}]*)\\}/g;
-    let m;
-    while ((m = re.exec(win)) !== null) {
-      const blk = m[1];
+    const win = html.slice(winStart, winStart + 120000);
+    const idTag = '"id":"' + id + '"';
+    const idPos = win.indexOf(idTag);
+    if (idPos < 0) return '';
+    const local = win.slice(idPos, idPos + 35000);
+    const blks = collectListingPriceBlocks(local);
+    const parsed = [];
+    for (const blk of blks) {
       const amtM = blk.match(/"amount"\\s*:\\s*"([^"]+)"/);
       if (!amtM) continue;
       const v = parseFloat(amtM[1]);
       if (!(v > 0)) continue;
       const fmtM = blk.match(/"formatted_amount_zeros_stripped"\\s*:\\s*"([^"]*)"/);
-      if (fmtM && fmtM[1]) return decodeJsonEscapes(fmtM[1]);
+      const label = (fmtM && fmtM[1]) ? decodeJsonEscapes(fmtM[1]) : null;
       const curM = blk.match(/"currency"\\s*:\\s*"([^"]*)"/);
-      return (curM && curM[1]) ? (amtM[1] + ' ' + curM[1]) : amtM[1];
+      const plain = (curM && curM[1]) ? (amtM[1] + ' ' + curM[1]) : amtM[1];
+      parsed.push({ v, text: label || plain });
     }
-    return '';
+    if (parsed.length === 0) return '';
+    let use = parsed;
+    if (parsed.some(p => p.v >= 15) && parsed.some(p => p.v === 1)) {
+      use = parsed.filter(p => p.v !== 1);
+      if (use.length === 0) use = parsed;
+    }
+    return use[0].text;
   }
 
   function firstPlausibleEuroFromText(text) {
     if (!text) return '';
     const re = /\\d{1,3}(?:\\.\\d{3})*(?:,\\d{2})?\\s*€|€\\s*\\d{1,3}(?:\\.\\d{3})*(?:,\\d{2})?/g;
+    const found = [];
     let m;
     while ((m = re.exec(text)) !== null) {
       const raw = m[0].replace(/€/g, '').replace(/\\s/g, '').replace(/\\./g, '').replace(',', '.');
       const v = parseFloat(raw);
-      if (v > 0 && v < 100000000) return m[0].trim();
+      if (v > 0 && v < 100000000) found.push({ v, s: m[0].trim() });
     }
-    return '';
+    if (found.length === 0) return '';
+    if (found.some(x => x.v >= 25) && found.some(x => x.v === 1)) {
+      const f = found.filter(x => x.v !== 1);
+      if (f.length > 0) return f[0].s;
+    }
+    return found[0].s;
   }
 
   const ogTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content') || '';
@@ -140,6 +185,10 @@ EXTRACT_SCRIPT = """
   }
 
   const bodyRaw = (document.body && document.body.innerText) ? document.body.innerText : '';
+  if (!precio) {
+    const mainEl = document.querySelector('[role="main"]');
+    if (mainEl) precio = firstPlausibleEuroFromText(mainEl.innerText.slice(0, 14000));
+  }
   const body = bodyRaw.toLowerCase();
   const head = body.slice(0, 6000);
 
@@ -714,6 +763,9 @@ def main() -> None:
     if args.guardar_sesion:
         asyncio.run(guardar_sesion_facebook_interactiva())
         return
+
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        send_telegram(TELEGRAM_STARTUP_MESSAGE)
 
     urls = load_urls()
     state = load_state()
