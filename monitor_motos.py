@@ -910,7 +910,8 @@ def main() -> None:
         asyncio.run(guardar_sesion_facebook_interactiva())
         return
 
-    if os.environ.get("GITHUB_ACTIONS") != "true":
+    # En GitHub Actions también se envía por defecto. Para desactivar: MW_SKIP_MONITOR_STARTUP=1
+    if os.environ.get("MW_SKIP_MONITOR_STARTUP", "").lower() not in ("1", "true", "yes"):
         send_telegram(TELEGRAM_STARTUP_MESSAGE)
 
     urls = load_urls()

@@ -4,6 +4,8 @@
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  (obligatorios)
 #   PLAYWRIGHT_STORAGE_B64                (opcional, base64 de playwright_storage.json)
 #
+# Opcional en env del job: MW_SKIP_MONITOR_STARTUP=1  (no enviar el ping "Monitor activado…" cada ejecución)
+#
 # Tras cada ejecución, si cambia estado_motos.json, se hace commit y push a esta rama.
 # La sesión de Facebook sigue en la caché de Actions (o en PLAYWRIGHT_STORAGE_B64).
 
@@ -71,6 +73,13 @@ jobs:
         run: |
           test -f urls_motos.txt || (echo "Falta urls_motos.txt" && exit 1)
           test -f monitor_motos.py || (echo "Falta monitor_motos.py" && exit 1)
+
+      - name: Comprobar secretos Telegram
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::error::Configura TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en el repo: Settings → Secrets and variables → Actions"
+            exit 1
+          fi
 
       - name: Ejecutar monitor
         run: python monitor_motos.py
