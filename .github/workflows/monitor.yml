@@ -1,11 +1,11 @@
-# Programación: cada 4 h (UTC). Manual: pestaña Actions → Marketplace monitor → Run workflow.
+# Programación: cada 4 h (UTC). Manual: Actions → Marketplace monitor → Run workflow.
 #
 # Secretos (Settings → Secrets and variables → Actions):
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  (obligatorios)
 #   PLAYWRIGHT_STORAGE_B64                (opcional, base64 de playwright_storage.json)
 #
-# La sesión de Facebook y estado_motos.json se guardan en la caché de Actions entre ejecuciones.
-# Si la sesión caduca, actualiza PLAYWRIGHT_STORAGE_B64 o ejecuta un job manual tras generar el archivo en local.
+# Tras cada ejecución, si cambia estado_motos.json, se hace commit y push a esta rama.
+# La sesión de Facebook sigue en la caché de Actions (o en PLAYWRIGHT_STORAGE_B64).
 
 name: Marketplace monitor
 
@@ -23,6 +23,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
+    permissions:
+      contents: write
+
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -31,6 +34,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -45,16 +50,14 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium --with-deps
 
-      - name: Restaurar sesión Facebook y estado_motos.json
+      - name: Restaurar sesión Facebook (solo playwright_storage.json)
         uses: actions/cache@v4
         id: cache-monitor
         with:
-          path: |
-            playwright_storage.json
-            estado_motos.json
-          key: fb-monitor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: playwright_storage.json
+          key: fb-monitor-session-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            fb-monitor-
+            fb-monitor-session-
 
       - name: Sobrescribir sesión con el secreto (si está definido)
         env:
@@ -71,3 +74,15 @@ jobs:
 
       - name: Ejecutar monitor
         run: python monitor_motos.py
+
+      - name: Commit y push de estado_motos.json si cambió
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add estado_motos.json
+          if git diff --staged --quiet; then
+            echo "estado_motos.json sin cambios; no hay commit."
+          else
+            git commit -m "chore: actualizar estado_motos.json (Marketplace monitor)"
+            git push
+          fi
