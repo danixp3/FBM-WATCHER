@@ -34,11 +34,17 @@ from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
-# --- Telegram (obligatorio: variables de entorno o secretos en GitHub Actions) ---
+BASE_DIR = Path(__file__).resolve().parent
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env")
+except ImportError:
+    pass
+
+# --- Telegram: .env local (no subir) o variables de entorno / secretos en GitHub Actions ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-
-BASE_DIR = Path(__file__).resolve().parent
 URLS_FILE = BASE_DIR / "urls_motos.txt"
 STATE_FILE = BASE_DIR / "estado_motos.json"
 DEBUG_DIR = BASE_DIR / "debug_captures"
