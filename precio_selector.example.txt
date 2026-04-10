@@ -11,7 +11,6 @@
 # - Si el selector corto coincide con varios nodos, elige el primero cuyo texto parezca un precio.
 #
 # Si un anuncio usa otro layout, añade una segunda línea con el selector copiado de ese layout.
-# El script solo usa este fichero si el precio sigue vacío o claramente mal tras el extractor automático.
 
 # span.ejemplo
 # #mount_0_0_AB > div > ... > span

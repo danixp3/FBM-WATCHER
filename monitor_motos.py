@@ -1,9 +1,6 @@
 """
 Monitor de anuncios de Facebook Marketplace con Playwright.
 
-Precio del anuncio (orden aproximado): JSON en la página → metas og/product → aria-label →
-nodos hoja en main → texto amplio de main → body; si sigue fallando, precio_selector.txt.
-
 Cómo detecta cambios
 --------------------
 1. Al terminar, guarda en estado_motos.json un objeto por cada URL: título, precio,
@@ -192,37 +189,6 @@ EXTRACT_SCRIPT = """
     return found[0].s;
   }
 
-  function bestPriceFromMainLeaves() {
-    const main = document.querySelector('[role="main"]');
-    if (!main) return '';
-    let bestV = 0;
-    let bestS = '';
-    const els = main.querySelectorAll('span, div, h1, h2, p');
-    const maxN = 1000;
-    let n = 0;
-    for (const el of els) {
-      if (n++ > maxN) break;
-      if (el.children && el.children.length) continue;
-      const t = (el.textContent || '').replace(/\\s+/g, ' ').trim();
-      if (t.length < 4 || t.length > 48) continue;
-      const hit = firstPlausibleEuroFromText(t);
-      if (!hit) continue;
-      const nums = hit.replace(/[^\\d.,]/g, ' ').trim().split(/\\s+/).filter(Boolean);
-      let v = 0;
-      for (const part of nums) {
-        const pv = parseFloat(part.replace(/\\./g, '').replace(',', '.'));
-        if (pv > v) v = pv;
-      }
-      if (!(v > 0)) continue;
-      if (v < 35 || v > 900000) continue;
-      if (v > bestV) {
-        bestV = v;
-        bestS = hit.trim();
-      }
-    }
-    return bestS;
-  }
-
   const ogTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content') || '';
   const ogDesc = document.querySelector('meta[property="og:description"]')?.getAttribute('content') || '';
   const ogType = document.querySelector('meta[property="og:type"]')?.getAttribute('content') || '';
@@ -243,6 +209,10 @@ EXTRACT_SCRIPT = """
   }
 
   const bodyRaw = (document.body && document.body.innerText) ? document.body.innerText : '';
+  if (!precio) {
+    const mainEl = document.querySelector('[role="main"]');
+    if (mainEl) precio = firstPlausibleEuroFromText(mainEl.innerText.slice(0, 14000));
+  }
   const body = bodyRaw.toLowerCase();
   const head = body.slice(0, 6000);
 
@@ -298,10 +268,6 @@ EXTRACT_SCRIPT = """
     }
   }
 
-  /* Precio en la página (orden de prioridad; lo más estructurado y menos ruido primero):
-     1) JSON embebido  2) meta product:price  3) og:description línea 1
-     4) aria-label con €  5) nodos hoja en [role=main] (mayor importe plausible)
-     6) primer € en bloque de texto de main  7) primer € en todo el body */
   let precioRegex = '';
   if (!precio) {
     const ariaCand = [];
@@ -322,13 +288,6 @@ EXTRACT_SCRIPT = """
       ariaCand.sort((x, y) => y.v - x.v);
       precio = ariaCand[0].a;
     }
-  }
-  if (!precio) {
-    precio = bestPriceFromMainLeaves();
-  }
-  if (!precio) {
-    const mainEl = document.querySelector('[role="main"]');
-    if (mainEl) precio = firstPlausibleEuroFromText(mainEl.innerText.slice(0, 14000));
   }
   if (!precio) precioRegex = firstPlausibleEuroFromText(bodyRaw);
 
@@ -439,23 +398,6 @@ def _text_looks_like_price(txt: str) -> bool:
     if len(nums) < 3:
         return False
     return len(t) <= 45
-
-
-def _precio_necesita_selector_css(precio: str) -> bool:
-    """
-    True si conviene intentar precio_selector.txt.
-    Si el extractor (JSON, aria, main…) ya devolvió un precio razonable, no lo pisamos con CSS.
-    """
-    p = (precio or "").strip()
-    if not p:
-        return True
-    if len(p) > 85:
-        return True
-    if not re.search(r"\d", p):
-        return True
-    if p.count("\n") > 2:
-        return True
-    return False
 
 
 async def _pick_price_with_css_selectors(page, selector_lines: list[str]) -> str | None:
@@ -817,9 +759,8 @@ async def fetch_listing(page, url: str, post_wait_ms: int, debug: bool) -> dict:
     else:
         result["precio"] = raw_precio
 
-    # Último recurso: selectores copiados del navegador (solo si el precio sigue vacío o inválido).
     css_lines = load_price_css_selectors()
-    if css_lines and _precio_necesita_selector_css(result["precio"]):
+    if css_lines:
         picked = await _pick_price_with_css_selectors(page, css_lines)
         if picked:
             result["precio"] = picked
