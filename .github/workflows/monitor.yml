@@ -75,7 +75,7 @@ jobs:
           test -f urls_motos.txt || (echo "Falta urls_motos.txt" && exit 1)
           test -f monitor_motos.py || (echo "Falta monitor_motos.py" && exit 1)
 
-      - name: Comprobar secretos Telegram (igual que el script: strip + comillas)
+      - name: "Comprobar secretos Telegram (mismo criterio que el script — strip y comillas)"
         run: |
           python << 'PY'
           import os, sys
