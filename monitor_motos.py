@@ -344,9 +344,11 @@ def save_state(state: dict) -> None:
     tmp.replace(STATE_FILE)
 
 
-def load_price_css_selector() -> str | None:
+def load_price_css_selectors() -> list[str]:
+    """Todas las líneas de selector en orden (la primera tiene prioridad)."""
     if not PRECIO_SELECTOR_FILE.is_file():
-        return None
+        return []
+    out: list[str] = []
     for line in PRECIO_SELECTOR_FILE.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
@@ -354,7 +356,76 @@ def load_price_css_selector() -> str | None:
         # Comentario: "# texto" pero no selector tipo #id o #mount_...
         if line.startswith("#") and not re.match(r"^#[A-Za-z0-9_-]{2,}(\s|[>,\[\(:]|$)", line):
             continue
-        return line
+        out.append(line)
+    return out
+
+
+def _expand_price_selector_candidates(css_sel: str) -> list[str]:
+    """
+    Facebook: #mount_* cambia cada build; las clases x* del medio también entre vistas.
+    Genera variantes: completo, sin mount, y sufijos (últimos N segmentos del selector).
+    """
+    s = css_sel.strip()
+    if not s:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def add(x: str) -> None:
+        x = x.strip()
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+
+    add(s)
+    no_mount = re.sub(r"^#mount_[a-zA-Z0-9_]+\s*>\s*", "", s)
+    add(no_mount)
+    parts = [p.strip() for p in re.split(r"\s*>\s*", no_mount) if p.strip()]
+    if len(parts) >= 2:
+        max_take = min(8, len(parts))
+        for take in range(max_take, 1, -1):
+            add(" > ".join(parts[-take:]))
+    return out
+
+
+def _text_looks_like_price(txt: str) -> bool:
+    t = (txt or "").strip()
+    if not t or len(t) > 120:
+        return False
+    if re.search(r"[€$£]|EUR|USD", t, re.I):
+        return bool(re.search(r"\d", t))
+    nums = re.sub(r"\D", "", t)
+    if len(nums) < 3:
+        return False
+    return len(t) <= 45
+
+
+async def _pick_price_with_css_selectors(page, selector_lines: list[str]) -> str | None:
+    """Prueba cada línea del fichero y variantes; con selectores cortos recorre varios matches."""
+    ordered_candidates: list[str] = []
+    seen_c: set[str] = set()
+    for raw in selector_lines:
+        for cand in _expand_price_selector_candidates(raw):
+            if cand not in seen_c:
+                seen_c.add(cand)
+                ordered_candidates.append(cand)
+
+    for sel in ordered_candidates:
+        try:
+            loc = page.locator(sel)
+            n = await loc.count()
+            if n == 0:
+                continue
+            limit = min(n, 25 if len(sel) < 80 else 8)
+            for i in range(limit):
+                try:
+                    txt = (await loc.nth(i).inner_text()).strip()
+                except Exception:
+                    continue
+                if _text_looks_like_price(txt):
+                    return txt
+        except Exception:
+            continue
     return None
 
 
@@ -688,22 +759,11 @@ async def fetch_listing(page, url: str, post_wait_ms: int, debug: bool) -> dict:
     else:
         result["precio"] = raw_precio
 
-    css_sel = load_price_css_selector()
-    if css_sel:
-        candidates = [css_sel.strip()]
-        no_mount = re.sub(r"^#mount_[a-zA-Z0-9_]+\s*>\s*", "", css_sel.strip())
-        if no_mount and no_mount != css_sel.strip():
-            candidates.append(no_mount)
-        for sel in candidates:
-            try:
-                loc = page.locator(sel).first
-                if await loc.count() > 0:
-                    txt = (await loc.inner_text()).strip()
-                    if txt and (re.search(r"\d", txt) or "€" in txt or "EUR" in txt.upper()):
-                        result["precio"] = txt
-                        break
-            except Exception:
-                continue
+    css_lines = load_price_css_selectors()
+    if css_lines:
+        picked = await _pick_price_with_css_selectors(page, css_lines)
+        if picked:
+            result["precio"] = picked
 
     result["disponible"] = bool(data.get("disponible", True))
     result["blocked"] = bool(data.get("blocked", False))

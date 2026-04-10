@@ -1,7 +1,16 @@
-# Copia este archivo como precio_selector.txt (una sola línea activa sin # al inicio).
-# Chrome: clic derecho en el precio → Inspeccionar → clic derecho en el nodo → Copy selector.
+# Copia como precio_selector.txt. Puedes poner VARIAS líneas de selector (orden = prioridad).
+# Chrome: clic derecho en el precio → Inspeccionar → Copy → Copy selector.
 #
-# Si el selector empieza por #mount_0_0_xx, ese id cambia cada carga; el script intenta
-# también la misma ruta sin el mount. Si falla, vuelve a copiar el selector.
+# Por qué falla a veces:
+# - #mount_0_0_xx cambia en cada carga o entre anuncios.
+# - Las clases tipo x9f619 son generadas y Facebook las cambia entre vistas (móvil/desktop, A/B).
+#
+# Qué hace el script:
+# - Prueba cada línea del fichero.
+# - Para cada una: selector completo, el mismo sin #mount_..., y sufijos (últimos segmentos).
+# - Si el selector corto coincide con varios nodos, elige el primero cuyo texto parezca un precio.
+#
+# Si un anuncio usa otro layout, añade una segunda línea con el selector copiado de ese layout.
 
 # span.ejemplo
+# #mount_0_0_AB > div > ... > span
