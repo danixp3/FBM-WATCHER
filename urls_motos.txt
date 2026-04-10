@@ -1,0 +1,25 @@
+# Una URL por línea. Las líneas que empiezan por # se ignoran.
+# https://www.facebook.com/marketplace/item/XXXXXXXX/
+https://www.facebook.com/marketplace/item/916353771361992/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/1406452637037744/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/696621309987357/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/841864562209566/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/1348860613949172/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/959107206721391/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/3319096431590623/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/1713826130042481/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/1190268842572540/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/24897376286604098/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/1458106042538128/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/963212422723888/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/823283657470440/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/2811168049215148/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/1885288435754273/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/2347556848988184/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/877273071889457/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/948391184312200/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/2092829428163196/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/1420508015950021/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/998756222678374/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/1357181746217155/?ref=saved&referral_code=null
+https://www.facebook.com/marketplace/item/2257273011449720/?ref=search&referral_code=null

@@ -1,0 +1,11 @@
+# Sesión de Facebook (nunca subir)
+playwright_storage.json
+
+# Capturas locales de depuración
+debug_captures/
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env

@@ -1,0 +1,73 @@
+# Programación: cada 4 h (UTC). Manual: pestaña Actions → Marketplace monitor → Run workflow.
+#
+# Secretos (Settings → Secrets and variables → Actions):
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  (obligatorios)
+#   PLAYWRIGHT_STORAGE_B64                (opcional, base64 de playwright_storage.json)
+#
+# La sesión de Facebook y estado_motos.json se guardan en la caché de Actions entre ejecuciones.
+# Si la sesión caduca, actualiza PLAYWRIGHT_STORAGE_B64 o ejecuta un job manual tras generar el archivo en local.
+
+name: Marketplace monitor
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: marketplace-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      MW_CONCURRENCY: "2"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependencias y Chromium
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Restaurar sesión Facebook y estado_motos.json
+        uses: actions/cache@v4
+        id: cache-monitor
+        with:
+          path: |
+            playwright_storage.json
+            estado_motos.json
+          key: fb-monitor-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            fb-monitor-
+
+      - name: Sobrescribir sesión con el secreto (si está definido)
+        env:
+          PLAYWRIGHT_STORAGE_B64: ${{ secrets.PLAYWRIGHT_STORAGE_B64 }}
+        run: |
+          if [ -n "$PLAYWRIGHT_STORAGE_B64" ]; then
+            echo "$PLAYWRIGHT_STORAGE_B64" | base64 -d > playwright_storage.json
+          fi
+
+      - name: Comprobar archivos
+        run: |
+          test -f urls_motos.txt || (echo "Falta urls_motos.txt" && exit 1)
+          test -f monitor_motos.py || (echo "Falta monitor_motos.py" && exit 1)
+
+      - name: Ejecutar monitor
+        run: python monitor_motos.py
