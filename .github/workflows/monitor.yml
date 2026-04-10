@@ -1,4 +1,6 @@
-# Programación: cada 4 h (UTC). Manual: Actions → Marketplace monitor → Run workflow.
+# Programación: cada 4 h (UTC) en los servidores de GitHub — no requiere tu PC encendido.
+# Requiere Actions activado en el repo y este archivo en la rama por defecto (suele ser main).
+# Manual: Actions → Marketplace monitor → Run workflow.
 #
 # Secretos (Settings → Secrets and variables → Actions):
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  (obligatorios)
