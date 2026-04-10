@@ -9,3 +9,6 @@ __pycache__/
 .venv/
 venv/
 .env
+
+# Escritura atómica de estado (si falla a mitad)
+estado_motos.tmp

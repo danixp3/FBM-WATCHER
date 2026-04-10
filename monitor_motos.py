@@ -9,6 +9,7 @@ Cómo detecta cambios
 3. Solo compara precio/disponibilidad cuando la lectura actual y la anterior son válidas
    (se considera que realmente viste el anuncio, no login ni banner de cookies).
 4. Si antes leías bien y ahora no (login/cookies), envía un aviso distinto para que revises.
+5. Al guardar, quita del JSON las URLs que ya no están en urls_motos.txt (el estado no crece con anuncios borrados).
 
 Facebook suele exigir iniciar sesión para ver anuncios del Marketplace. Una vez ejecuta:
   python monitor_motos.py --guardar-sesion
@@ -26,7 +27,6 @@ import os
 import re
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -338,10 +338,10 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
-    STATE_FILE.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    text = json.dumps(state, ensure_ascii=False, indent=2)
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(STATE_FILE)
 
 
 def load_price_css_selector() -> str | None:
@@ -466,6 +466,7 @@ def classify_snapshot(data: dict, final_url: str, start_url: str = "") -> tuple[
     """
     Devuelve (lectura_valida, pagina_tipo, motivo).
     pagina_tipo: anuncio | login | cookies | no_item | vacio | desconocida
+    (En fetch_listing, errores HTTP tempranos usan pagina_tipo "http_error".)
 
     Importante: hay que detectar login/redirección *antes* de exigir /marketplace/item/ en la
     URL final; si no, un 302 a login se etiquetaba como no_item y avisaba mal en Telegram.
@@ -512,10 +513,6 @@ def classify_snapshot(data: dict, final_url: str, start_url: str = "") -> tuple[
             "login",
             "Título de pantalla de acceso. Ejecuta: python monitor_motos.py --guardar-sesion",
         )
-
-    og_type = (data.get("ogType") or "").lower()
-    if og_type and og_type not in ("product", "article", "website"):
-        pass
 
     return True, "anuncio", None
 
@@ -659,8 +656,8 @@ async def fetch_listing(page, url: str, post_wait_ms: int, debug: bool) -> dict:
             result["disponible"] = False
             result["error"] = f"HTTP {resp.status}"
             result["lectura_valida"] = False
-            result["pagina_tipo"] = "no_item"
-            result["motivo_lectura"] = f"HTTP {resp.status}"
+            result["pagina_tipo"] = "http_error"
+            result["motivo_lectura"] = f"Respuesta HTTP {resp.status} al cargar la página."
             return result
     except PlaywrightTimeout:
         result["error"] = "timeout"
@@ -691,20 +688,6 @@ async def fetch_listing(page, url: str, post_wait_ms: int, debug: bool) -> dict:
     else:
         result["precio"] = raw_precio
 
-    result["disponible"] = bool(data.get("disponible", True))
-    result["blocked"] = bool(data.get("blocked", False))
-    result["cookie_banner"] = bool(data.get("cookieLikely", False))
-
-    valid, tipo, motivo = classify_snapshot(data, result["url_final"], url)
-    result["lectura_valida"] = valid
-    result["pagina_tipo"] = tipo
-    result["motivo_lectura"] = motivo
-
-    if result["blocked"] and not motivo:
-        result["error"] = result["error"] or "posible_login"
-    elif result["pagina_tipo"] == "cookies":
-        result["error"] = result["error"] or "cookies"
-
     css_sel = load_price_css_selector()
     if css_sel:
         candidates = [css_sel.strip()]
@@ -721,6 +704,20 @@ async def fetch_listing(page, url: str, post_wait_ms: int, debug: bool) -> dict:
                         break
             except Exception:
                 continue
+
+    result["disponible"] = bool(data.get("disponible", True))
+    result["blocked"] = bool(data.get("blocked", False))
+    result["cookie_banner"] = bool(data.get("cookieLikely", False))
+
+    valid, tipo, motivo = classify_snapshot(data, result["url_final"], url)
+    result["lectura_valida"] = valid
+    result["pagina_tipo"] = tipo
+    result["motivo_lectura"] = motivo
+
+    if result["blocked"] and not motivo:
+        result["error"] = result["error"] or "posible_login"
+    elif result["pagina_tipo"] == "cookies":
+        result["error"] = result["error"] or "cookies"
 
     if debug:
         DEBUG_DIR.mkdir(exist_ok=True)
@@ -910,6 +907,11 @@ async def run_checks(
             compare_and_notify(url, prev, entry)
         url_map[url] = entry
 
+    # Quitar del JSON entradas de URLs que ya no están en urls_motos.txt (evita estado eternamente hinchado).
+    keep = set(urls)
+    for stale in [k for k in url_map if k not in keep]:
+        del url_map[stale]
+
 
 def cmd_probar_telegram() -> None:
     token = _telegram_secret("TELEGRAM_BOT_TOKEN")
@@ -971,7 +973,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--probar-telegram",
         action="store_true",
-        help="Comprueba el token y muestra chat_id tras enviar un mensaje al bot en Telegram.",
+        help="Comprueba el token (getMe) y muestra chat_id desde getUpdates (envía /start al bot antes).",
     )
     p.add_argument(
         "--verificar",
