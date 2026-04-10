@@ -189,6 +189,37 @@ EXTRACT_SCRIPT = """
     return found[0].s;
   }
 
+  function bestPriceFromMainLeaves() {
+    const main = document.querySelector('[role="main"]');
+    if (!main) return '';
+    let bestV = 0;
+    let bestS = '';
+    const els = main.querySelectorAll('span, div, h1, h2, p');
+    const maxN = 1000;
+    let n = 0;
+    for (const el of els) {
+      if (n++ > maxN) break;
+      if (el.children && el.children.length) continue;
+      const t = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (t.length < 4 || t.length > 48) continue;
+      const hit = firstPlausibleEuroFromText(t);
+      if (!hit) continue;
+      const nums = hit.replace(/[^\\d.,]/g, ' ').trim().split(/\\s+/).filter(Boolean);
+      let v = 0;
+      for (const part of nums) {
+        const pv = parseFloat(part.replace(/\\./g, '').replace(',', '.'));
+        if (pv > v) v = pv;
+      }
+      if (!(v > 0)) continue;
+      if (v < 35 || v > 900000) continue;
+      if (v > bestV) {
+        bestV = v;
+        bestS = hit.trim();
+      }
+    }
+    return bestS;
+  }
+
   const ogTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content') || '';
   const ogDesc = document.querySelector('meta[property="og:description"]')?.getAttribute('content') || '';
   const ogType = document.querySelector('meta[property="og:type"]')?.getAttribute('content') || '';
@@ -288,6 +319,9 @@ EXTRACT_SCRIPT = """
       ariaCand.sort((x, y) => y.v - x.v);
       precio = ariaCand[0].a;
     }
+  }
+  if (!precio) {
+    precio = bestPriceFromMainLeaves();
   }
   if (!precio) precioRegex = firstPlausibleEuroFromText(bodyRaw);
 
