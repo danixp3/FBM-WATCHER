@@ -18,7 +18,7 @@ on:
 
 concurrency:
   group: marketplace-monitor
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   monitor:
@@ -38,6 +38,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: true
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -74,27 +75,53 @@ jobs:
           test -f urls_motos.txt || (echo "Falta urls_motos.txt" && exit 1)
           test -f monitor_motos.py || (echo "Falta monitor_motos.py" && exit 1)
 
-      - name: Comprobar secretos Telegram
+      - name: Comprobar secretos Telegram (igual que el script: strip + comillas)
         run: |
-          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "::error::Configura TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en el repo: Settings → Secrets and variables → Actions"
-            exit 1
-          fi
+          python << 'PY'
+          import os, sys
+
+          def norm(v: str) -> str:
+              v = (v or "").strip().strip("\ufeff")
+              if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                  v = v[1:-1].strip()
+              return v
+
+          t = norm(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+          c = norm(os.environ.get("TELEGRAM_CHAT_ID", ""))
+          if not t or not c:
+              print(
+                  "::error::TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID vacíos tras quitar espacios/comillas. "
+                  "Repite el valor en GitHub → Settings → Secrets and variables → Actions (sin espacios al inicio/fin)."
+              )
+              sys.exit(1)
+          print("Secretos Telegram: presentes (longitud token=%d, chat_id=%d)." % (len(t), len(c)))
+          PY
 
       - name: Ejecutar monitor
         run: python monitor_motos.py
 
+      - name: Diagnóstico estado_motos.json
+        if: always()
+        run: |
+          if [ -f estado_motos.json ]; then
+            echo "estado_motos.json existe, tamaño $(wc -c < estado_motos.json) bytes"
+            head -n 5 estado_motos.json
+          else
+            echo "::warning::No existe estado_motos.json tras el monitor (¿el job falló antes del finally?)"
+          fi
+          git status --porcelain estado_motos.json || true
+
       - name: Commit y push de estado_motos.json si cambió
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "${GITHUB_REF_NAME}" --depth=1
-          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
           git add estado_motos.json
           if git diff --staged --quiet; then
-            echo "estado_motos.json sin cambios respecto al último commit."
+            echo "estado_motos.json sin cambios respecto al último commit (contenido idéntico)."
           else
             git commit -m "chore: actualizar estado_motos.json (Marketplace monitor)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
             echo "Push de estado_motos.json completado."
           fi

@@ -47,6 +47,18 @@ def _env_strip(key: str) -> str:
     return (os.environ.get(key) or "").strip().strip("\ufeff")
 
 
+def _telegram_secret(key: str) -> str:
+    """Token/chat_id: quita espacios, BOM y comillas típicas de copiar/pegar."""
+    v = _env_strip(key)
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1].strip()
+    return v
+
+
+def _running_in_github_actions() -> bool:
+    return os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+
+
 # --- Telegram: .env local (no subir) o variables de entorno / secretos en GitHub Actions ---
 TELEGRAM_BOT_TOKEN = _env_strip("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = _env_strip("TELEGRAM_CHAT_ID")
@@ -351,10 +363,18 @@ def send_telegram(message: str) -> bool:
     Lee token/chat del entorno en cada llamada (importante en GitHub Actions).
     Devuelve True si no hay credenciales (no es error) o si Telegram respondió ok.
     False si había credenciales pero la API falló.
+    En GitHub Actions, credenciales vacías tras normalizar = error (evita job “verde” sin Telegram).
     """
-    token = _env_strip("TELEGRAM_BOT_TOKEN")
-    raw_chat = _env_strip("TELEGRAM_CHAT_ID")
+    token = _telegram_secret("TELEGRAM_BOT_TOKEN")
+    raw_chat = _telegram_secret("TELEGRAM_CHAT_ID")
     if not token or not raw_chat:
+        if _running_in_github_actions():
+            print(
+                "::error::TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID vacíos o inválidos "
+                "(revisa secretos: sin espacios extra, token del BotFather, chat_id numérico).",
+                file=sys.stderr,
+            )
+            return False
         print("[Aviso] Telegram no configurado; mensaje no enviado:", message[:200], file=sys.stderr)
         return True
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -850,10 +870,11 @@ async def run_checks(
 
 
 def cmd_probar_telegram() -> None:
-    if not TELEGRAM_BOT_TOKEN:
+    token = _telegram_secret("TELEGRAM_BOT_TOKEN")
+    if not token:
         print("Falta TELEGRAM_BOT_TOKEN en .env o en el entorno.", file=sys.stderr)
         sys.exit(1)
-    base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/"
+    base = f"https://api.telegram.org/bot{token}/"
     try:
         with urllib.request.urlopen(base + "getMe", timeout=20) as r:
             me = json.loads(r.read().decode("utf-8"))
@@ -951,16 +972,18 @@ def main() -> None:
         asyncio.run(guardar_sesion_facebook_interactiva())
         return
 
-    # En GitHub Actions también se envía por defecto. Para desactivar: MW_SKIP_MONITOR_STARTUP=1
-    if os.environ.get("MW_SKIP_MONITOR_STARTUP", "").lower() not in ("1", "true", "yes"):
-        if not send_telegram(TELEGRAM_STARTUP_MESSAGE):
-            print("Fallo al enviar a Telegram con credenciales configuradas; abortando.", file=sys.stderr)
-            sys.exit(1)
-
     urls = load_urls()
     state = load_state()
     url_map: dict[str, dict] = state["urls"]
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    startup_telegram_ok = True
+    # En GitHub Actions también se envía por defecto. Para desactivar: MW_SKIP_MONITOR_STARTUP=1
+    if os.environ.get("MW_SKIP_MONITOR_STARTUP", "").lower() not in ("1", "true", "yes"):
+        startup_telegram_ok = send_telegram(TELEGRAM_STARTUP_MESSAGE)
+        if not startup_telegram_ok and not _running_in_github_actions():
+            print("Fallo al enviar a Telegram con credenciales configuradas; abortando.", file=sys.stderr)
+            sys.exit(1)
 
     if args.verificar:
         print("OK = lectura considerada anuncio real | tipo = login|cookies|anuncio|…")
@@ -987,6 +1010,10 @@ def main() -> None:
         print("-" * 120)
         print("(Modo --verificar: no se guarda estado_motos.json.)")
         return
+
+    if not startup_telegram_ok:
+        print("Fallo el mensaje inicial a Telegram (revisa token, chat_id y que hayas escrito al bot).", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
