@@ -432,17 +432,45 @@ def normalize_price(s: str) -> str:
     return s
 
 
-def classify_snapshot(data: dict, final_url: str) -> tuple[bool, str, str | None]:
+def _url_points_at_marketplace_item(url: str) -> bool:
+    """True si la URL pedida es la de un anuncio (aunque luego Facebook redirija)."""
+    if not url:
+        return False
+    try:
+        return "/marketplace/item/" in (urlparse(url).path or "").lower()
+    except Exception:
+        return False
+
+
+def _looks_like_facebook_auth_redirect(final_url: str) -> bool:
+    """Login, checkpoint o enlaces intermedios típicos (p. ej. l.php) antes del anuncio."""
+    u = (final_url or "").lower()
+    if not u:
+        return False
+    if "login" in u or "checkpoint" in u or "/oauth" in u:
+        return True
+    try:
+        p = urlparse(final_url)
+        path = (p.path or "").lower().rstrip("/")
+        host = (p.netloc or "").lower()
+    except Exception:
+        return False
+    if path in ("/login", "/login.php"):
+        return True
+    if "facebook.com" in host and (path == "/l.php" or path.startswith("/l.php")):
+        return True
+    return False
+
+
+def classify_snapshot(data: dict, final_url: str, start_url: str = "") -> tuple[bool, str, str | None]:
     """
     Devuelve (lectura_valida, pagina_tipo, motivo).
     pagina_tipo: anuncio | login | cookies | no_item | vacio | desconocida
-    """
-    path = urlparse(final_url).path.lower()
-    if "/marketplace/item/" not in path:
-        return False, "no_item", "La URL no acabó en /marketplace/item/… (redirección o error)."
 
-    titulo = (data.get("titulo") or "").strip()
-    tl = titulo.lower()
+    Importante: hay que detectar login/redirección *antes* de exigir /marketplace/item/ en la
+    URL final; si no, un 302 a login se etiquetaba como no_item y avisaba mal en Telegram.
+    """
+    path = urlparse(final_url or "").path.lower()
 
     if data.get("blocked"):
         return (
@@ -451,15 +479,29 @@ def classify_snapshot(data: dict, final_url: str) -> tuple[bool, str, str | None
             "Facebook pide iniciar sesión. Ejecuta: python monitor_motos.py --guardar-sesion",
         )
 
-    if "login" in final_url.lower() or "checkpoint" in final_url.lower():
+    if _looks_like_facebook_auth_redirect(final_url):
         return (
             False,
             "login",
-            "Redirección a login o verificación. Ejecuta: python monitor_motos.py --guardar-sesion",
+            "Redirección a login, verificación o enlace intermedio de Facebook. "
+            "Renueva la sesión (local: --guardar-sesión; CI: caché o PLAYWRIGHT_STORAGE_B64).",
         )
 
     if data.get("cookieLikely"):
         return False, "cookies", "Parece el diálogo o capa de cookies (revisa captura con --debug)."
+
+    if "/marketplace/item/" not in path:
+        if _url_points_at_marketplace_item(start_url):
+            return (
+                False,
+                "login",
+                "Facebook redirigió fuera del anuncio (sesión caducada o bloqueo en headless). "
+                "Actualiza playwright_storage.json o el secreto PLAYWRIGHT_STORAGE_B64.",
+            )
+        return False, "no_item", "La URL no acabó en /marketplace/item/… (redirección o error)."
+
+    titulo = (data.get("titulo") or "").strip()
+    tl = titulo.lower()
 
     if len(titulo) < 4:
         return False, "vacio", "Sin título útil; probablemente no cargó el anuncio."
@@ -653,7 +695,7 @@ async def fetch_listing(page, url: str, post_wait_ms: int, debug: bool) -> dict:
     result["blocked"] = bool(data.get("blocked", False))
     result["cookie_banner"] = bool(data.get("cookieLikely", False))
 
-    valid, tipo, motivo = classify_snapshot(data, result["url_final"])
+    valid, tipo, motivo = classify_snapshot(data, result["url_final"], url)
     result["lectura_valida"] = valid
     result["pagina_tipo"] = tipo
     result["motivo_lectura"] = motivo
