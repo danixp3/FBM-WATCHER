@@ -42,15 +42,21 @@ try:
 except ImportError:
     pass
 
+
+def _env_strip(key: str) -> str:
+    return (os.environ.get(key) or "").strip().strip("\ufeff")
+
+
 # --- Telegram: .env local (no subir) o variables de entorno / secretos en GitHub Actions ---
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_BOT_TOKEN = _env_strip("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = _env_strip("TELEGRAM_CHAT_ID")
 TELEGRAM_STARTUP_MESSAGE = "¡Monitor de motos activado y buscando!"
 URLS_FILE = BASE_DIR / "urls_motos.txt"
 STATE_FILE = BASE_DIR / "estado_motos.json"
 DEBUG_DIR = BASE_DIR / "debug_captures"
 # Cookies aceptadas una vez; en siguientes ejecuciones Facebook suele no mostrar el diálogo.
 PLAYWRIGHT_STORAGE_FILE = BASE_DIR / "playwright_storage.json"
+PRECIO_SELECTOR_FILE = BASE_DIR / "precio_selector.txt"
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -136,15 +142,21 @@ EXTRACT_SCRIPT = """
       const label = (fmtM && fmtM[1]) ? decodeJsonEscapes(fmtM[1]) : null;
       const curM = blk.match(/"currency"\\s*:\\s*"([^"]*)"/);
       const plain = (curM && curM[1]) ? (amtM[1] + ' ' + curM[1]) : amtM[1];
-      parsed.push({ v, text: label || plain });
+      parsed.push({ v, text: label || plain, hasFmt: !!(fmtM && fmtM[1]) });
     }
     if (parsed.length === 0) return '';
-    let use = parsed;
+    let pool = parsed;
     if (parsed.some(p => p.v >= 15) && parsed.some(p => p.v === 1)) {
-      use = parsed.filter(p => p.v !== 1);
-      if (use.length === 0) use = parsed;
+      pool = parsed.filter(p => p.v !== 1);
+      if (pool.length === 0) pool = parsed;
     }
-    return use[0].text;
+    const withFmt = pool.filter(p => p.hasFmt);
+    const pick = (arr) => {
+      arr.sort((a, b) => b.v - a.v);
+      return arr[0].text;
+    };
+    if (withFmt.length > 0) return pick(withFmt);
+    return pick(pool);
   }
 
   function firstPlausibleEuroFromText(text) {
@@ -245,6 +257,26 @@ EXTRACT_SCRIPT = """
   }
 
   let precioRegex = '';
+  if (!precio) {
+    const ariaCand = [];
+    document.querySelectorAll('[aria-label]').forEach((el) => {
+      const a = (el.getAttribute('aria-label') || '').trim();
+      if (!a || a.length > 55) return;
+      if (!/[€$]|EUR|USD/i.test(a) || !/\\d/.test(a)) return;
+      const nums = a.replace(/[^\\d.,]/g, ' ').trim().split(/\\s+/).filter(Boolean);
+      let best = 0;
+      for (const n of nums) {
+        const t = n.replace(/\\./g, '').replace(',', '.');
+        const v = parseFloat(t);
+        if (v > best) best = v;
+      }
+      if (best > 0) ariaCand.push({ v: best, a });
+    });
+    if (ariaCand.length) {
+      ariaCand.sort((x, y) => y.v - x.v);
+      precio = ariaCand[0].a;
+    }
+  }
   if (!precio) precioRegex = firstPlausibleEuroFromText(bodyRaw);
 
   return {
@@ -300,22 +332,57 @@ def save_state(state: dict) -> None:
     )
 
 
+def load_price_css_selector() -> str | None:
+    if not PRECIO_SELECTOR_FILE.is_file():
+        return None
+    for line in PRECIO_SELECTOR_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Comentario: "# texto" pero no selector tipo #id o #mount_...
+        if line.startswith("#") and not re.match(r"^#[A-Za-z0-9_-]{2,}(\s|[>,\[\(:]|$)", line):
+            continue
+        return line
+    return None
+
+
 def send_telegram(message: str) -> None:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("[Aviso] Telegram no configurado; mensaje no enviado:", message[:200], file=sys.stderr)
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    raw_chat = TELEGRAM_CHAT_ID.strip()
+    if re.fullmatch(r"-?\d+", raw_chat):
+        chat: str | int = int(raw_chat)
+    else:
+        chat = raw_chat
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": chat,
         "text": message,
         "disable_web_page_preview": True,
     }
-    data = urllib.parse.urlencode(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="POST")
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             if resp.status != 200:
                 print(f"Telegram HTTP {resp.status}", file=sys.stderr)
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        print(f"Error Telegram HTTP {e.code}: {e.reason}\n{err_body}", file=sys.stderr)
+        if e.code == 400 and "chat not found" in err_body.lower():
+            print(
+                "\n→ El chat_id no es válido para este bot, o aún no has escrito al bot.\n"
+                "  1) Abre Telegram, busca tu bot y envía /start (o cualquier mensaje).\n"
+                "  2) Ejecuta: python monitor_motos.py --probar-telegram\n"
+                "     y copia el chat_id que salga en TELEGRAM_CHAT_ID del .env\n",
+                file=sys.stderr,
+            )
     except urllib.error.URLError as e:
         print(f"Error Telegram: {e}", file=sys.stderr)
 
@@ -559,6 +626,23 @@ async def fetch_listing(page, url: str, post_wait_ms: int, debug: bool) -> dict:
     elif result["pagina_tipo"] == "cookies":
         result["error"] = result["error"] or "cookies"
 
+    css_sel = load_price_css_selector()
+    if css_sel:
+        candidates = [css_sel.strip()]
+        no_mount = re.sub(r"^#mount_[a-zA-Z0-9_]+\s*>\s*", "", css_sel.strip())
+        if no_mount and no_mount != css_sel.strip():
+            candidates.append(no_mount)
+        for sel in candidates:
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() > 0:
+                    txt = (await loc.inner_text()).strip()
+                    if txt and (re.search(r"\d", txt) or "€" in txt or "EUR" in txt.upper()):
+                        result["precio"] = txt
+                        break
+            except Exception:
+                continue
+
     if debug:
         DEBUG_DIR.mkdir(exist_ok=True)
         safe = re.sub(r"[^\w.-]+", "_", urlparse(url).path)[-80:] or "page"
@@ -724,8 +808,67 @@ async def run_checks(
         url_map[url] = entry
 
 
+def cmd_probar_telegram() -> None:
+    if not TELEGRAM_BOT_TOKEN:
+        print("Falta TELEGRAM_BOT_TOKEN en .env o en el entorno.", file=sys.stderr)
+        sys.exit(1)
+    base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/"
+    try:
+        with urllib.request.urlopen(base + "getMe", timeout=20) as r:
+            me = json.loads(r.read().decode("utf-8"))
+        if not me.get("ok"):
+            print("getMe:", me, file=sys.stderr)
+            sys.exit(1)
+        b = me.get("result") or {}
+        print(f"Bot @{b.get('username')} — token correcto.")
+    except urllib.error.HTTPError as e:
+        print("Token inválido o error API:", e.read().decode("utf-8", errors="replace"), file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print("Red:", e, file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        with urllib.request.urlopen(base + "getUpdates?limit=40", timeout=20) as r:
+            up = json.loads(r.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        print("getUpdates:", e, file=sys.stderr)
+        sys.exit(1)
+
+    results = up.get("result") or []
+    if not results:
+        print(
+            "\nNo hay conversaciones recientes con este bot.\n"
+            "Abre Telegram → busca tu bot → envía /start (o hola).\n"
+            "Después vuelve a ejecutar: python monitor_motos.py --probar-telegram\n"
+        )
+        return
+
+    seen: set[tuple] = set()
+    print("\nUsa uno de estos valores en TELEGRAM_CHAT_ID (chat privado = tu número):")
+    for u in results:
+        msg = u.get("message") or u.get("channel_post") or u.get("edited_message")
+        if not msg:
+            continue
+        chat = msg.get("chat") or {}
+        cid = chat.get("id")
+        typ = chat.get("type")
+        name = chat.get("title") or chat.get("username") or chat.get("first_name") or ""
+        key = (cid, typ)
+        if key in seen:
+            continue
+        seen.add(key)
+        print(f"  TELEGRAM_CHAT_ID={cid}   (tipo: {typ}, {name})")
+    print()
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Monitor Facebook Marketplace → estado_motos.json + Telegram")
+    p.add_argument(
+        "--probar-telegram",
+        action="store_true",
+        help="Comprueba el token y muestra chat_id tras enviar un mensaje al bot en Telegram.",
+    )
     p.add_argument(
         "--verificar",
         action="store_true",
@@ -760,6 +903,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.probar_telegram:
+        cmd_probar_telegram()
+        return
     if args.guardar_sesion:
         asyncio.run(guardar_sesion_facebook_interactiva())
         return

@@ -1,0 +1,7 @@
+# Copia este archivo como precio_selector.txt (una sola línea activa sin # al inicio).
+# Chrome: clic derecho en el precio → Inspeccionar → clic derecho en el nodo → Copy selector.
+#
+# Si el selector empieza por #mount_0_0_xx, ese id cambia cada carga; el script intenta
+# también la misma ruta sin el mount. Si falla, vuelve a copiar el selector.
+
+# span.ejemplo
